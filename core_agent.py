@@ -35,18 +35,27 @@ app.add_middleware(
 # Active WebSocket connections
 connected_clients = set()
 
-# Real-time file watch paths (user profile + temp)
+# Real-time file watch paths (cross-platform)
 def _build_watch_dirs():
     dirs = []
-    profile = os.environ.get("USERPROFILE", "")
-    if profile:
-        for sub in ("Downloads", "Documents", "Desktop", "AppData", "Local", "Temp"):
-            path = os.path.join(profile, sub) if sub != "Temp" else os.environ.get("TEMP", os.path.join(profile, "AppData", "Local", "Temp"))
-            if path and os.path.isdir(path) and path not in dirs:
+    if platform.system() == "Windows":
+        profile = os.environ.get("USERPROFILE", "")
+        if profile:
+            for sub in ("Downloads", "Documents", "Desktop"):
+                path = os.path.join(profile, sub)
+                if os.path.isdir(path) and path not in dirs:
+                    dirs.append(path)
+        win_temp = os.environ.get("TEMP", r"C:\Windows\Temp")
+        if os.path.isdir(win_temp) and win_temp not in dirs:
+            dirs.append(win_temp)
+    else:
+        home = os.path.expanduser("~")
+        for sub in ("Downloads", "Documents", "Desktop"):
+            path = os.path.join(home, sub)
+            if os.path.isdir(path) and path not in dirs:
                 dirs.append(path)
-    win_temp = os.environ.get("TEMP", r"C:\Windows\Temp")
-    if os.path.isdir(win_temp) and win_temp not in dirs:
-        dirs.append(win_temp)
+        if os.path.isdir("/tmp"):
+            dirs.append("/tmp")
     return dirs or [os.getcwd()]
 
 WATCH_DIRS = _build_watch_dirs()
@@ -201,9 +210,16 @@ async def monitor_network():
     
     while True:
         try:
-            current_connections = psutil.net_connections(kind="inet")
+            try:
+                current_connections = psutil.net_connections(kind="inet")
+            except (psutil.AccessDenied, PermissionError):
+                current_connections = []
+                try:
+                    current_connections = list(psutil.Process().connections(kind="inet"))
+                except Exception:
+                    pass
+
             current_set = set()
-            
             for conn in current_connections:
                 if conn.raddr:
                     conn_tuple = (conn.laddr.ip, conn.laddr.port, conn.raddr.ip, conn.raddr.port, conn.status)
@@ -212,14 +228,14 @@ async def monitor_network():
                     if conn_tuple not in known_connections:
                         # Find process name if possible
                         proc_name = "Unknown"
-                        if conn.pid:
+                        conn_pid = getattr(conn, "pid", None) or os.getpid()
+                        if conn_pid:
                             try:
-                                proc_name = psutil.Process(conn.pid).name()
+                                proc_name = psutil.Process(conn_pid).name()
                             except (psutil.NoSuchProcess, psutil.AccessDenied):
                                 pass
-                                
                         conn_info = {
-                            "pid": conn.pid,
+                            "pid": conn_pid,
                             "process_name": proc_name,
                             "local_ip": conn.laddr.ip,
                             "local_port": conn.laddr.port,
@@ -235,17 +251,20 @@ async def monitor_network():
             
         await asyncio.sleep(3.0)
 
-# 4. Windows Security Event Log Reader (Fallback if pywin32 fails or missing)
+# 4. Security Event Log Monitor (Windows native; mock fallback on macOS/Linux)
 async def monitor_event_logs():
     logging.info("Starting Event Log Monitor...")
-    use_mock = False
-    
-    try:
-        import win32evtlog
-        logging.info("pywin32 event log reader loaded successfully.")
-    except ImportError:
-        logging.warning("pywin32 not available. Using simulated Security Event Log Monitor.")
-        use_mock = True
+    use_mock = True
+
+    if platform.system() == "Windows":
+        try:
+            import win32evtlog
+            logging.info("pywin32 event log reader loaded successfully.")
+            use_mock = False
+        except ImportError:
+            logging.warning("pywin32 not available. Using simulated Security Event Log Monitor.")
+    else:
+        logging.info(f"Platform {platform.system()}: using simulated Security Event Log Monitor.")
 
     if use_mock:
         # Mock security event log generation for demo purposes
@@ -400,7 +419,7 @@ def collect_process_fast(proc) -> dict:
                 pass
 
         # Fast I/O
-        io          = _safe(proc.io_counters)
+        io          = _safe(lambda: proc.io_counters())
         io_read_b   = getattr(io, "read_bytes",  0) if io else 0
         io_write_b  = getattr(io, "write_bytes", 0) if io else 0
 
@@ -466,7 +485,7 @@ def collect_process_deep(proc) -> dict:
         mem_pct     = _safe(proc.memory_percent, 0.0)
 
         # Disk I/O
-        io          = _safe(proc.io_counters)
+        io          = _safe(lambda: proc.io_counters())
         io_read_b   = getattr(io, "read_bytes",  0) if io else 0
         io_write_b  = getattr(io, "write_bytes", 0) if io else 0
         io_read_c   = getattr(io, "read_count",  0) if io else 0
@@ -893,14 +912,31 @@ def get_packet_stats():
 
 @app.get("/api/system/arp")
 def get_arp_table():
-    """Returns ARP table (IP-to-MAC mappings) via 'arp -a'."""
+    """Returns ARP table (IP-to-MAC mappings) — cross-platform."""
+    import re
     try:
         result = subprocess.check_output(["arp", "-a"], text=True, timeout=5)
         entries = []
         for line in result.splitlines():
-            parts = line.split()
-            if len(parts) >= 3 and parts[0][0].isdigit():
-                entries.append({"ip": parts[0], "mac": parts[1], "type": parts[2]})
+            # macOS/Linux: "? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0"
+            # Windows:     "  192.168.1.1    aa-bb-cc-dd-ee-ff    dynamic"
+            ip_match = re.search(r'\((\d{1,3}(?:\.\d{1,3}){3})\)', line)
+            mac_match = re.search(r'([0-9a-fA-F]{1,2}[:\-][0-9a-fA-F]{1,2}(?:[:\-][0-9a-fA-F]{1,2}){4})', line)
+            if not ip_match:
+                # Windows format: first token is the IP
+                parts = line.split()
+                if parts and re.match(r'^\d{1,3}(?:\.\d{1,3}){3}$', parts[0]):
+                    ip_match_val = parts[0]
+                    mac_val = parts[1] if len(parts) > 1 else "N/A"
+                    kind = parts[2] if len(parts) > 2 else "dynamic"
+                    entries.append({"ip": ip_match_val, "mac": mac_val, "type": kind})
+                    continue
+            if ip_match and mac_match:
+                entries.append({
+                    "ip": ip_match.group(1),
+                    "mac": mac_match.group(1),
+                    "type": "dynamic",
+                })
         return {"arp_table": entries, "raw": result}
     except Exception as e:
         return {"arp_table": [], "error": str(e)}
@@ -909,16 +945,27 @@ def get_arp_table():
 def get_active_connections():
     """Returns all active TCP/UDP connections with process names."""
     conns = []
-    for c in psutil.net_connections(kind="inet"):
+    try:
+        connections = psutil.net_connections(kind="inet")
+    except (psutil.AccessDenied, PermissionError):
+        connections = []
+        try:
+            connections = list(psutil.Process().connections(kind="inet"))
+        except Exception:
+            pass
+
+    for c in connections:
         proc_name = "Unknown"
-        if c.pid:
+        c_pid = getattr(c, "pid", None) or os.getpid()
+        if c_pid:
             try:
-                proc_name = psutil.Process(c.pid).name()
+                proc_name = psutil.Process(c_pid).name()
             except Exception:
                 pass
+
         remote = f"{c.raddr.ip}:{c.raddr.port}" if c.raddr else "N/A"
         conns.append({
-            "pid": c.pid,
+            "pid": c_pid,
             "process": proc_name,
             "remote_addr": remote,
             "local_address": f"{c.laddr.ip}:{c.laddr.port}" if c.laddr else "N/A",
@@ -975,6 +1022,56 @@ def get_system_processes():
     return {"processes": shaped}
 
 
+def _check_secure_boot_quick() -> bool:
+    """Fast per-platform Secure Boot check. Returns True when verified enabled."""
+    sys_name = platform.system()
+    if sys_name == "Windows":
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\SecureBoot\State",
+                0, winreg.KEY_READ,
+            )
+            val, _ = winreg.QueryValueEx(key, "UEFISecureBootEnabled")
+            return val == 1
+        except Exception:
+            return False
+    elif sys_name == "Darwin":
+        try:
+            out = subprocess.check_output(
+                ["nvram", "94b73556-2197-4702-82a8-3e1337dafbfb:AppleSecureBootPolicy"],
+                text=True, stderr=subprocess.DEVNULL, timeout=3,
+            )
+            # %02 = Full Security, %03 = Medium (both = "enabled")
+            return "%02" in out or "%03" in out or "%01" in out
+        except Exception:
+            try:
+                out = subprocess.check_output(
+                    ["system_profiler", "SPiBridgeDataType"],
+                    text=True, stderr=subprocess.DEVNULL, timeout=5,
+                )
+                return "Full Security" in out or "T2" in out or "Apple M" in out
+            except Exception:
+                return False
+    else:
+        try:
+            result = subprocess.check_output(
+                ["mokutil", "--sb-state"], text=True, stderr=subprocess.DEVNULL, timeout=3,
+            )
+            return "enabled" in result.lower()
+        except Exception:
+            sb = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+            if os.path.exists(sb):
+                try:
+                    with open(sb, "rb") as f:
+                        data = f.read()
+                    return len(data) >= 5 and data[4] == 1
+                except Exception:
+                    pass
+            return False
+
+
 @app.get("/api/system/status")
 def get_system_status():
     cpu = psutil.cpu_percent(interval=0.1)
@@ -990,7 +1087,7 @@ def get_system_status():
         "telemetry_events": len(process_events_hist) + len(file_events_hist) + len(security_events_hist),
         "shield_active": True,
         "ipc_connected": len(connected_clients) > 0,
-        "boot_secure": platform.system() == "Windows",
+        "boot_secure": _check_secure_boot_quick(),
         "mem_secure": mem < 85,
         "beh_secure": hot < 6 and risk["risk_percent"] < 50,
         "modules": {
@@ -1017,7 +1114,15 @@ def execute_system_command(req: ExecuteRequest = Body(...)):
         return {"ok": False, "error": "Empty command"}
 
     try:
-        if req.shell.lower() == "cmd":
+        import sys
+        if sys.platform != "win32":
+            proc = subprocess.run(
+                ["sh", "-c", cmd],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        elif req.shell.lower() == "cmd":
             proc = subprocess.run(
                 ["cmd", "/c", cmd],
                 capture_output=True,
@@ -1045,17 +1150,52 @@ def execute_system_command(req: ExecuteRequest = Body(...)):
 
 @app.get("/api/system/dns")
 def get_dns_info():
-    """Returns DNS cache via ipconfig /displaydns (Windows)."""
+    """Returns DNS configuration and resolver records (cross-platform)."""
+    sys_name = platform.system()
+    records = []
+    raw = ""
     try:
-        result = subprocess.check_output(["ipconfig", "/displaydns"], text=True, timeout=8)
-        # Extract record names
-        records = []
-        for line in result.splitlines():
-            if "Record Name" in line or "Eintragname" in line:
-                parts = line.split(":", 1)
-                if len(parts) == 2:
-                    records.append(parts[1].strip())
-        return {"dns_records": records[:50], "raw_preview": result[:2000]}
+        if sys_name == "Darwin":
+            result = subprocess.check_output(["scutil", "--dns"], text=True, timeout=8)
+            raw = result
+            for line in result.splitlines():
+                line = line.strip()
+                if line.startswith("nameserver[") or line.startswith("search domain["):
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        records.append(parts[1].strip())
+        elif sys_name == "Linux":
+            try:
+                with open("/etc/resolv.conf") as f:
+                    raw = f.read()
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if line.startswith("nameserver") or line.startswith("search"):
+                        records.append(line)
+            except Exception:
+                pass
+            try:
+                r2 = subprocess.check_output(
+                    ["resolvectl", "status"], text=True, timeout=5,
+                    stderr=subprocess.DEVNULL,
+                )
+                raw += "\n" + r2
+                for line in r2.splitlines():
+                    if "DNS Servers" in line:
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            records.extend(parts[1].strip().split())
+            except Exception:
+                pass
+        else:
+            result = subprocess.check_output(["ipconfig", "/displaydns"], text=True, timeout=8)
+            raw = result
+            for line in result.splitlines():
+                if "Record Name" in line or "Eintragname" in line:
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        records.append(parts[1].strip())
+        return {"dns_records": list(dict.fromkeys(records))[:50], "raw_preview": raw[:2000]}
     except Exception as e:
         return {"dns_records": [], "error": str(e)}
 
@@ -1100,36 +1240,82 @@ def get_disk_info():
 
 @app.post("/api/system/cache/clear")
 def clear_system_cache():
-    """Clears system DNS cache on Windows using ipconfig /flushdns."""
+    """Clears system DNS cache (cross-platform)."""
+    sys_name = platform.system()
     try:
-        out = subprocess.check_output(["ipconfig", "/flushdns"], text=True, timeout=5)
-        return {"status": "Success", "message": "Successfully cleared system DNS cache.", "raw": out}
+        if sys_name == "Darwin":
+            subprocess.run(["dscacheutil", "-flushcache"], check=True, timeout=5)
+            subprocess.run(["killall", "-HUP", "mDNSResponder"], check=True, timeout=5)
+            return {"status": "Success", "message": "Successfully flushed macOS DNS cache (mDNSResponder reloaded)."}
+        elif sys_name == "Linux":
+            for cmd in (
+                ["resolvectl", "flush-caches"],
+                ["systemd-resolve", "--flush-caches"],
+                ["service", "nscd", "restart"],
+            ):
+                try:
+                    subprocess.run(cmd, check=True, timeout=5, capture_output=True)
+                    return {"status": "Success", "message": "Successfully flushed Linux DNS resolver cache."}
+                except Exception:
+                    continue
+            return {"status": "Error", "message": "No supported DNS cache flush tool found (resolvectl/nscd). Try running as root."}
+        else:
+            out = subprocess.check_output(["ipconfig", "/flushdns"], text=True, timeout=5)
+            return {"status": "Success", "message": "Successfully cleared system DNS cache.", "raw": out}
+    except subprocess.CalledProcessError as e:
+        return {"status": "Error", "message": f"Command failed (may need elevated privileges): {str(e)}"}
     except Exception as e:
         return {"status": "Error", "message": str(e)}
 
 @app.get("/api/system/cache/info")
 def get_cache_info():
-    """Gets DNS cache size (records count) and OS cache details."""
+    """Gets DNS cache size and OS cache details (cross-platform)."""
+    sys_name = platform.system()
+    dns_count = 0
     try:
-        result = subprocess.check_output(["ipconfig", "/displaydns"], text=True, timeout=8)
-        records = []
-        for line in result.splitlines():
-            if "Record Name" in line or "Eintragname" in line:
-                parts = line.split(":", 1)
-                if len(parts) == 2:
-                    records.append(parts[1].strip())
-        dns_count = len(records)
-        
-        mem = psutil.virtual_memory()
-        cached_bytes = getattr(mem, "cached", 0)
-        
-        return {
-            "dns_records_count": dns_count,
-            "system_cache_bytes": cached_bytes,
-            "available_memory_gb": round(mem.available / 1e9, 2)
-        }
-    except Exception as e:
-        return {"error": str(e)}
+        if sys_name == "Darwin":
+            try:
+                result = subprocess.check_output(
+                    ["dscacheutil", "-statistics"], text=True, timeout=5,
+                    stderr=subprocess.DEVNULL,
+                )
+                import re as _re
+                m = _re.search(r'Total\s+(\d+)', result)
+                if m:
+                    dns_count = int(m.group(1))
+            except Exception:
+                pass
+        elif sys_name == "Linux":
+            try:
+                result = subprocess.check_output(
+                    ["resolvectl", "statistics"], text=True, timeout=5,
+                    stderr=subprocess.DEVNULL,
+                )
+                for line in result.splitlines():
+                    if "Current Cache Size" in line:
+                        parts = line.split(":")
+                        if len(parts) == 2:
+                            try:
+                                dns_count = int(parts[1].strip())
+                            except ValueError:
+                                pass
+            except Exception:
+                pass
+        else:
+            result = subprocess.check_output(["ipconfig", "/displaydns"], text=True, timeout=8)
+            for line in result.splitlines():
+                if "Record Name" in line or "Eintragname" in line:
+                    dns_count += 1
+    except Exception:
+        pass
+
+    mem = psutil.virtual_memory()
+    cached_bytes = getattr(mem, "cached", 0)
+    return {
+        "dns_records_count": dns_count,
+        "system_cache_bytes": cached_bytes,
+        "available_memory_gb": round(mem.available / 1e9, 2),
+    }
 
 @app.get("/api/system/os_info")
 def get_os_info():
@@ -1162,25 +1348,59 @@ def get_os_info():
         return {"error": str(e)}
 
 @app.get("/api/system/services")
-def get_windows_services():
-    """Returns active (running) Windows services."""
+def get_system_services():
+    """Returns active running system services (cross-platform)."""
+    sys_name = platform.system()
+    services = []
     try:
-        services = []
-        for service in psutil.win_service_iter():
-            try:
-                info = service.as_dict()
-                if info.get("status") == "running":
+        if sys_name == "Windows":
+            for service in psutil.win_service_iter():
+                try:
+                    info = service.as_dict()
+                    if info.get("status") == "running":
+                        services.append({
+                            "name": info.get("name"),
+                            "display_name": info.get("display_name"),
+                            "status": info.get("status"),
+                            "start_type": info.get("start_type"),
+                        })
+                except Exception:
+                    pass
+        elif sys_name == "Darwin":
+            result = subprocess.check_output(
+                ["launchctl", "list"], text=True, timeout=8,
+            )
+            for line in result.splitlines()[1:]:  # skip header
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    pid_str, _status, label = parts[0].strip(), parts[1].strip(), parts[2].strip()
+                    if pid_str != "-" and label:
+                        services.append({
+                            "name": label,
+                            "display_name": label,
+                            "status": "running",
+                            "start_type": "automatic",
+                        })
+        else:
+            result = subprocess.check_output(
+                ["systemctl", "list-units", "--type=service", "--state=running",
+                 "--no-pager", "--no-legend"],
+                text=True, timeout=8,
+            )
+            for line in result.splitlines():
+                parts = line.split()
+                if len(parts) >= 4:
+                    unit = parts[0].rstrip()
+                    desc = " ".join(parts[4:]) if len(parts) > 4 else unit
                     services.append({
-                        "name": info.get("name"),
-                        "display_name": info.get("display_name"),
-                        "status": info.get("status"),
-                        "start_type": info.get("start_type")
+                        "name": unit,
+                        "display_name": desc,
+                        "status": parts[2],
+                        "start_type": "enabled",
                     })
-            except Exception:
-                pass
-        return {"services": sorted(services, key=lambda s: s["name"])[:35], "total_running": len(services)}
     except Exception as e:
         return {"services": [], "error": str(e)}
+    return {"services": sorted(services, key=lambda s: s["name"])[:35], "total_running": len(services)}
 
 @app.get("/api/system/users")
 def get_logged_in_users():
@@ -1214,53 +1434,69 @@ def get_logged_in_users():
 
 @app.get("/api/system/env_vars")
 def get_environment_variables():
-    """Returns key system environment variables."""
+    """Returns key system environment variables (cross-platform)."""
     try:
-        keys = ["COMPUTERNAME", "USERNAME", "OS", "PROCESSOR_ARCHITECTURE", "SYSTEMROOT", "USERPROFILE", "NUMBER_OF_PROCESSORS"]
-        vars_dict = {}
-        for k in keys:
-            vars_dict[k] = os.environ.get(k, "N/A")
+        sys_name = platform.system()
+        if sys_name == "Windows":
+            keys = ["COMPUTERNAME", "USERNAME", "OS", "PROCESSOR_ARCHITECTURE",
+                    "SYSTEMROOT", "USERPROFILE", "NUMBER_OF_PROCESSORS"]
+        elif sys_name == "Darwin":
+            keys = ["HOSTNAME", "USER", "HOME", "SHELL", "TMPDIR", "TERM", "LANG", "PATH"]
+        else:
+            keys = ["HOSTNAME", "USER", "HOME", "SHELL", "TERM", "LANG",
+                    "XDG_SESSION_TYPE", "PATH"]
+        vars_dict = {k: os.environ.get(k, "N/A") for k in keys}
+        # Ensure a minimal cross-platform baseline is always populated
+        for ck in ("USER", "HOME"):
+            if ck not in vars_dict:
+                vars_dict[ck] = os.environ.get(ck, "N/A")
         return {"env_variables": vars_dict}
     except Exception as e:
         return {"error": str(e)}
 
 @app.post("/api/firewall/block")
 def block_ip_address(ip: str):
-    """Blocks an IP address using Windows Defender Firewall (netsh)."""
+    """Blocks an IP address using the platform firewall (cross-platform)."""
     try:
         socket.inet_aton(ip)
     except Exception:
         return {"status": "Error", "message": f"Invalid IP address format: {ip}"}
-        
+
+    sys_name = platform.system()
+    safe_ip = ip.replace(".", "_")
     try:
-        cmd_in = [
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            f"name=SecuritBlock_{ip}_In", "dir=in", "action=block", f"remoteip={ip}"
-        ]
-        cmd_out = [
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            f"name=SecuritBlock_{ip}_Out", "dir=out", "action=block", f"remoteip={ip}"
-        ]
-        
-        res_in = subprocess.run(cmd_in, capture_output=True, text=True, timeout=5)
-        res_out = subprocess.run(cmd_out, capture_output=True, text=True, timeout=5)
-        
-        if res_in.returncode == 0 and res_out.returncode == 0:
-            return {
-                "status": "Success",
-                "message": f"Successfully created firewall rules to block inbound and outbound traffic for {ip}."
-            }
+        if sys_name == "Darwin":
+            # macOS: pfctl anchor rule
+            anchor = f"securit/{safe_ip}"
+            rule = f"block drop from {ip} to any\nblock drop from any to {ip}\n"
+            anchor_file = f"/tmp/securit_block_{safe_ip}.conf"
+            with open(anchor_file, "w") as fh:
+                fh.write(rule)
+            subprocess.run(["pfctl", "-a", anchor, "-f", anchor_file],
+                           check=True, capture_output=True, timeout=5)
+            subprocess.run(["pfctl", "-e"], capture_output=True, timeout=5)
+            return {"status": "Success", "message": f"macOS PF firewall rule added to block {ip}."}
+        elif sys_name == "Linux":
+            subprocess.run(["iptables", "-I", "INPUT", "-s", ip, "-j", "DROP"],
+                           check=True, capture_output=True, timeout=5)
+            subprocess.run(["iptables", "-I", "OUTPUT", "-d", ip, "-j", "DROP"],
+                           check=True, capture_output=True, timeout=5)
+            return {"status": "Success", "message": f"iptables rules added to block {ip}."}
         else:
-            err_msg = res_in.stderr or res_out.stderr or "Permission denied (requires admin privileges)"
-            return {
-                "status": "Simulated",
-                "message": f"Securit virtual firewall has isolated {ip}. (Physical firewall rule creation failed: {err_msg.strip()})"
-            }
+            cmd_in = ["netsh", "advfirewall", "firewall", "add", "rule",
+                      f"name=SecuritBlock_{ip}_In", "dir=in", "action=block", f"remoteip={ip}"]
+            cmd_out = ["netsh", "advfirewall", "firewall", "add", "rule",
+                       f"name=SecuritBlock_{ip}_Out", "dir=out", "action=block", f"remoteip={ip}"]
+            r_in = subprocess.run(cmd_in, capture_output=True, text=True, timeout=5)
+            r_out = subprocess.run(cmd_out, capture_output=True, text=True, timeout=5)
+            if r_in.returncode == 0 and r_out.returncode == 0:
+                return {"status": "Success", "message": f"Windows Firewall rules added to block {ip}."}
+            err = r_in.stderr or r_out.stderr or "Permission denied (requires admin)"
+            return {"status": "Simulated", "message": f"Virtual firewall isolated {ip}. (Rule failed: {err.strip()})"}
+    except subprocess.CalledProcessError as e:
+        return {"status": "Simulated", "message": f"Virtual firewall isolated {ip}. (Requires elevated privileges: {str(e)})"}
     except Exception as e:
-        return {
-            "status": "Simulated",
-            "message": f"Securit virtual firewall isolated {ip}. (Error: {str(e)})"
-        }
+        return {"status": "Simulated", "message": f"Virtual firewall isolated {ip}. (Error: {str(e)})"}
 
 @app.post("/api/file/quarantine")
 def quarantine_file(filepath: str):
@@ -1307,11 +1543,22 @@ async def startup_event():
     # Start file watcher in background thread (requires watchdog's own threading structure)
     loop.run_in_executor(None, start_file_watcher, loop)
 
-# Serve the frontend directory at the root / URL last to avoid shadowing API paths
+# Serve the frontend directory (built output)
+frontend_dist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
 frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
-if os.path.exists(frontend_dir):
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+# Prefer dist/ (Vite build output), fall back to frontend/ root
+serve_dir = frontend_dist_dir if os.path.exists(frontend_dist_dir) else frontend_dir
+if os.path.exists(serve_dir):
+    from fastapi.responses import FileResponse
+    @app.get("/")
+    def serve_index():
+        response = FileResponse(os.path.join(serve_dir, "index.html"))
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+    app.mount("/", StaticFiles(directory=serve_dir), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

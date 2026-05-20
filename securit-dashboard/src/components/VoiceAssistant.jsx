@@ -28,8 +28,60 @@ export default function VoiceAssistant({ onToast }) {
 
   // Auto-scroll chat to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Real-time Event Listener to WebSocket
+  useEffect(() => {
+    let ws;
+    function connect() {
+      ws = new WebSocket("ws://127.0.0.1:8000/ws");
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const isThreat = data && (
+            data.type === "THREAT" || 
+            data.event === "THREAT" || 
+            data.event_type === "THREAT" || 
+            (data.event_type === "SECURITY_LOG" && data.data?.severity === "CRITICAL")
+          );
+          if (isThreat) {
+            const msg = data.message || data.details || data.data?.description || "Critical threat detected.";
+            const alertText = `Warning: Critical threat detected. ${msg}. Do you want me to stop it?`;
+            
+            setMessages(prev => [
+              ...prev,
+              {
+                sender: "Jarvis",
+                text: alertText,
+                timestamp: new Date().toLocaleTimeString(),
+                parsedData: data
+              }
+            ]);
+            
+            speak(alertText);
+          }
+        } catch (err) {
+          console.error("Failed to parse WebSocket message:", err);
+        }
+      };
+
+      ws.onclose = () => {
+        setTimeout(connect, 5000);
+      };
+
+      ws.onerror = (err) => {
+        console.error("WebSocket connection error:", err);
+        ws.close();
+      };
+    }
+
+    connect();
+    return () => {
+      if (ws) ws.close();
+    };
+  }, []);
 
   // TTS helper
   function speak(text) {

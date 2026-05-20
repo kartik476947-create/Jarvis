@@ -1,7 +1,7 @@
 import axios from 'axios';
 import type { AIParsedCommand } from '../types';
 
-const AI_URL = 'http://127.0.0.1:8001';
+const AI_URL = 'http://localhost:8001';
 
 const apiClient = axios.create({
   baseURL: AI_URL,
@@ -12,11 +12,10 @@ export const aiEngineApi = {
   async transcribeAudio(audioBlob: Blob): Promise<string> {
     try {
       const formData = new FormData();
-      formData.append('audio', audioBlob, 'recording.wav');
+      const ext = audioBlob.type.includes('mp4') ? 'm4a' : 'webm';
+      formData.append('file', audioBlob, `recording.${ext}`);
 
-      const res = await apiClient.post<{ transcript: string }>('/api/ai/transcribe', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
+      const res = await apiClient.post<{ transcript: string }>('/api/ai/transcribe', formData);
       return res.data.transcript || '';
     } catch (error) {
       console.error('Failed to transcribe audio:', error);
@@ -24,9 +23,13 @@ export const aiEngineApi = {
     }
   },
 
-  async parseCommand(text: string): Promise<AIParsedCommand | null> {
+  async parseCommand(text: string, history?: {type: string, content: string}[]): Promise<AIParsedCommand | null> {
     try {
-      const res = await apiClient.post<AIParsedCommand>('/api/ai/parse_command', { command: text, text });
+      const res = await apiClient.post<AIParsedCommand>('/api/ai/parse_command', { 
+        command: text, 
+        text,
+        history: history || []
+      });
       return res.data;
     } catch (error) {
       console.error('Failed to parse command:', error);

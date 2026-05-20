@@ -88,14 +88,25 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   isHtml?: boolean;
+  rawText?: string;
 }
 
 export interface AIParsedCommand {
+  intent?: string;
+  action?: string | null;
+  parameters?: Record<string, unknown>;
+  action_required?: boolean;
   threat_level: string;
+  response?: string;
+  speech_response?: string;
   analysis: string;
   action_plan: string;
   execution_details: Record<string, unknown>;
   requires_confirmation: boolean;
+  confirmation_required?: boolean;
+  technical_details?: string;
+  data?: unknown;
+  [key: string]: unknown;
 }
 
 // API Responses

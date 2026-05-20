@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useChat } from '../../hooks/useChat';
 import { useVoiceInput } from '../../hooks/useVoiceInput';
 import './AICoPilot.css';
@@ -11,9 +12,17 @@ export const AICoPilot = () => {
     sendCommand,
     confirmAction,
     cancelAction,
+    clearHistory,
   } = useChat();
 
   const { isListening, transcript, startListening, stopListening, reset } = useVoiceInput();
+
+  useEffect(() => {
+    if (transcript && !isListening) {
+      sendCommand(transcript);
+      reset();
+    }
+  }, [transcript, isListening, sendCommand, reset]);
 
   const handleSendMessage = (text: string) => {
     if (text.trim()) {
@@ -32,8 +41,14 @@ export const AICoPilot = () => {
 
   return (
     <div className="ai-copilot">
-      <div className="copilot-header">
+      <div className="copilot-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h3>TACTICAL AI CO-PILOT</h3>
+        <button 
+          onClick={clearHistory}
+          style={{ background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '9px', padding: '2px 6px', cursor: 'pointer' }}
+        >
+          CLEAR MEMORY
+        </button>
       </div>
 
       <div className="chat-feed">

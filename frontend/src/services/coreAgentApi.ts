@@ -9,7 +9,7 @@ import type {
   ExecuteResult,
 } from '../types';
 
-const CORE_URL = 'http://127.0.0.1:8000';
+const CORE_URL = 'http://localhost:8000';
 
 const apiClient = axios.create({
   baseURL: CORE_URL,
@@ -99,7 +99,7 @@ export const coreAgentApi = {
 
   async quarantineFile(filepath: string): Promise<{ status: string; message: string }> {
     try {
-      const res = await apiClient.post<{ status: string; message: string }>(`/api/file/quarantine?filepath=\${encodeURIComponent(filepath)}`);
+      const res = await apiClient.post<{ status: string; message: string }>(`/api/file/quarantine?filepath=${encodeURIComponent(filepath)}`);
       return res.data;
     } catch (error) {
       console.error('Failed to quarantine file:', error);

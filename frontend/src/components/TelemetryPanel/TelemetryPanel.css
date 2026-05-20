@@ -29,10 +29,21 @@
   border-bottom: 1px solid var(--border-subtle);
   background: #000000;
   padding: 0 12px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.telemetry-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+.telemetry-tabs::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 4px;
 }
 
 .telemetry-tabs .tab {
-  flex: 0 1 auto;
+  flex: 1;
+  min-width: max-content;
   padding: 12px 16px;
   background: transparent;
   border: none;

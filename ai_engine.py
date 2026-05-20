@@ -7,6 +7,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional, List, Dict
 from sklearn.ensemble import IsolationForest
 
 app = FastAPI(title="JARVIS AI Engine")
@@ -29,6 +30,7 @@ if os.path.exists(env_path):
                 os.environ[k] = v
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CORE_URL = "http://127.0.0.1:8000"
 
 # TTS Engine
@@ -61,6 +63,7 @@ class SystemState(BaseModel):
 
 class CommandInput(BaseModel):
     text: str
+    history: Optional[List[Dict[str, str]]] = []
 
 class SpeakInput(BaseModel):
     text: str
@@ -118,78 +121,129 @@ class ConfirmInput(BaseModel):
 
 
 def check_boot_integrity() -> dict:
-    secure_boot = "disabled"
+    import platform as _platform
+    import subprocess as _sp
+    sys_name = _platform.system()
+
+    secure_boot = "unknown"
     tpm_status = "unavailable"
-    risk_level = "CRITICAL"
-    issue = "Secure Boot is disabled — system is vulnerable to boot-level threats (bootkits/rootkits)"
-    recommended_action = ["Enable Secure Boot in BIOS", "Initialize TPM"]
 
-    # 1. Check Secure Boot via Registry
-    try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\SecureBoot\State", 0, winreg.KEY_READ)
-        val, _ = winreg.QueryValueEx(key, "UEFISecureBootEnabled")
-        if val == 1:
-            secure_boot = "enabled"
-    except Exception:
-        # Fallback if registry key doesn't exist
-        pass
+    if sys_name == "Windows":
+        # Secure Boot via registry
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SYSTEM\CurrentControlSet\Control\SecureBoot\State",
+                0, winreg.KEY_READ,
+            )
+            val, _ = winreg.QueryValueEx(key, "UEFISecureBootEnabled")
+            secure_boot = "enabled" if val == 1 else "disabled"
+        except Exception:
+            secure_boot = "disabled"
 
-    # 2. Check TPM State using WMI (via PowerShell CIM Instance)
-    try:
-        import subprocess
-        # Get-CimInstance is standard on Windows PowerShell
-        cmd = 'powershell -Command "Get-CimInstance -Namespace root\\CIMV2\\Security\\MicrosoftTpm -ClassName Win32_Tpm | Select-Object -Property IsEnabled_InitialValue, IsActivated_InitialValue, IsOwned_InitialValue | ConvertTo-Json"'
-        proc = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=3)
-        if proc.returncode == 0 and proc.stdout.strip():
-            tpm_data = json.loads(proc.stdout.strip())
-            
-            if isinstance(tpm_data, dict):
-                is_enabled = tpm_data.get("IsEnabled_InitialValue")
-                is_activated = tpm_data.get("IsActivated_InitialValue")
-                is_owned = tpm_data.get("IsOwned_InitialValue")
-                
-                # Check for "TPM Ready (Secure)"
-                if is_enabled is True and is_activated is True and is_owned is True:
-                    tpm_status = "ready"
-                # Check for TPM present but not fully owned/initialized
-                elif is_enabled is True or is_activated is True or is_owned is True:
-                    tpm_status = "partial"
-                else:
-                    tpm_status = "unavailable"
+        # TPM via PowerShell WMI
+        try:
+            cmd = ('powershell -Command "Get-CimInstance -Namespace root\\CIMV2\\Security\\MicrosoftTpm '
+                   '-ClassName Win32_Tpm | Select-Object -Property '
+                   'IsEnabled_InitialValue,IsActivated_InitialValue,IsOwned_InitialValue | ConvertTo-Json"')
+            proc = _sp.run(cmd, capture_output=True, text=True, shell=True, timeout=3)
+            if proc.returncode == 0 and proc.stdout.strip():
+                tpm_data = json.loads(proc.stdout.strip())
+                if isinstance(tpm_data, dict):
+                    e = tpm_data.get("IsEnabled_InitialValue")
+                    a = tpm_data.get("IsActivated_InitialValue")
+                    o = tpm_data.get("IsOwned_InitialValue")
+                    if e and a and o:
+                        tpm_status = "ready"
+                    elif e or a:
+                        tpm_status = "partial"
+        except Exception:
+            pass
+
+    elif sys_name == "Darwin":
+        # macOS: Secure Boot policy via nvram (Apple Silicon / T2)
+        try:
+            out = _sp.check_output(
+                ["nvram", "94b73556-2197-4702-82a8-3e1337dafbfb:AppleSecureBootPolicy"],
+                text=True, stderr=_sp.DEVNULL, timeout=3,
+            )
+            if "%02" in out or "%03" in out:
+                secure_boot = "enabled"
+            elif "%01" in out:
+                secure_boot = "reduced"
             else:
-                tpm_status = "unavailable"
-        else:
-            tpm_status = "unavailable"
-    except Exception:
-        tpm_status = "unavailable"
+                secure_boot = "disabled"
+        except Exception:
+            secure_boot = "disabled"
 
-    # 3. Combined Boot Trust Analysis
+        # Apple T1/T2/Secure Enclave = hardware security equivalent to TPM
+        try:
+            out = _sp.check_output(
+                ["system_profiler", "SPiBridgeDataType"],
+                text=True, stderr=_sp.DEVNULL, timeout=5,
+            )
+            if "T2" in out or "Apple M" in out or "T1" in out or "Secure Enclave" in out:
+                tpm_status = "ready"
+        except Exception:
+            pass
+
+    else:
+        # Linux: mokutil for Secure Boot
+        try:
+            result = _sp.check_output(
+                ["mokutil", "--sb-state"], text=True, stderr=_sp.DEVNULL, timeout=3,
+            )
+            secure_boot = "enabled" if "enabled" in result.lower() else "disabled"
+        except Exception:
+            sb_path = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+            if os.path.exists(sb_path):
+                try:
+                    with open(sb_path, "rb") as f:
+                        data = f.read()
+                    secure_boot = "enabled" if len(data) >= 5 and data[4] == 1 else "disabled"
+                except Exception:
+                    secure_boot = "unknown"
+            else:
+                secure_boot = "unknown"  # non-UEFI system
+
+        # Linux TPM device node
+        if os.path.exists("/dev/tpm0") or os.path.exists("/dev/tpmrm0"):
+            tpm_status = "ready"
+
+    # Combined boot trust analysis
     if secure_boot == "enabled" and tpm_status == "ready":
         risk_level = "SAFE"
         issue = "System startup environment is fully secured and verified."
         recommended_action = []
     elif secure_boot == "disabled" and tpm_status == "ready":
         risk_level = "WARNING"
-        issue = "Secure Boot is disabled — system is vulnerable to boot-level threats (bootkits/rootkits)"
-        recommended_action = ["Enable Secure Boot in BIOS"]
+        issue = "Secure Boot is disabled — system is vulnerable to boot-level threats (bootkits/rootkits)."
+        recommended_action = ["Enable Secure Boot in BIOS/UEFI settings"]
+    elif secure_boot in ("enabled", "reduced") and tpm_status != "ready":
+        risk_level = "WARNING"
+        issue = "Secure Boot is active but hardware security module (TPM/Secure Enclave) is unavailable."
+        recommended_action = ["Initialize TPM or Secure Enclave in firmware settings"]
+    elif secure_boot == "unknown":
+        risk_level = "WARNING"
+        issue = "Could not determine Secure Boot status on this platform."
+        recommended_action = ["Verify UEFI Secure Boot configuration manually"]
     else:
         risk_level = "CRITICAL"
-        issue = "Secure Boot is disabled and TPM is unavailable or uninitialized."
-        recommended_action = ["Enable Secure Boot in BIOS", "Initialize TPM in UEFI settings"]
+        issue = "Secure Boot is disabled and hardware security module is unavailable or uninitialized."
+        recommended_action = ["Enable Secure Boot in BIOS/UEFI settings", "Initialize TPM/Secure Enclave"]
 
-    # Check TPM Usage warning addition
     if tpm_status == "partial":
-        issue += " TPM is present but not actively enforcing hardware-backed protection."
-        if "Initialize TPM" not in recommended_action:
-            recommended_action.append("Initialize TPM")
+        issue += " Hardware security module is present but not fully initialized."
+        if "Initialize TPM" not in str(recommended_action):
+            recommended_action.append("Initialize TPM/Secure Enclave in firmware settings")
 
     return {
         "secure_boot": secure_boot,
         "tpm_status": tpm_status,
         "risk_level": risk_level,
         "issue": issue,
-        "recommended_action": recommended_action
+        "recommended_action": recommended_action,
     }
 
 
@@ -300,19 +354,36 @@ def format_securit_response(res: dict) -> dict:
     # Normalize confirmation
     is_critical = action in ["kill_pid", "kill_name", "block_address", "quarantine_file"]
     
+    # Map to both frontend custom and static production schemas perfectly
+    text_speech = res.get("response") or res.get("speech_response") or "Processed request."
+    conf_req = is_critical if "confirmation_required" not in res else res["confirmation_required"]
+
     response = {
         "intent": mapped_intent,
         "action_required": True if action else False,
-        "confirmation_required": is_critical if "confirmation_required" not in res else res["confirmation_required"],
+        "confirmation_required": conf_req,
         "target": res.get("target") or ("process" if action in ["kill_pid", "kill_name"] else ("ip" if action == "block_address" else ("system" if action else "system"))),
         "user_mode": res.get("user_mode") or "advanced",
-        "response": res.get("response") or res.get("speech_response") or "Processed request.",
+        "response": text_speech,
         "technical_details": tech_details,
         "execution_plan": exec_plan,
+
+        # Built-in production frontend schema fields
+        "threat_level": res.get("threat_level") or ("SUSPICIOUS" if mapped_intent == "SECURITY" else "SAFE"),
+        "analysis": text_speech,
+        "action_plan": " · ".join(exec_plan) if isinstance(exec_plan, list) else str(exec_plan),
+        "execution_details": {
+            "intent": mapped_intent,
+            "action": action,
+            "parameters": params,
+            "technical_details": tech_details
+        },
+        "requires_confirmation": conf_req,
+
         # Keep legacy fields for frontend compatibility
         "action": action,
         "parameters": params,
-        "speech_response": res.get("response") or res.get("speech_response") or "Processed request.",
+        "speech_response": text_speech,
         "data": res.get("data")
     }
 
@@ -370,22 +441,27 @@ def format_securit_response(res: dict) -> dict:
     return response
 
 
-def parse_with_groq(text: str):
-    if not GROQ_API_KEY:
-        return None
-    try:
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        prompt = f"""
+def parse_with_ai(text: str, history: Optional[List[Dict[str, str]]] = None):
+    history_context = ""
+    if history and len(history) > 0:
+        recent_history = history[-10:] # Store up to 10 messages for Gemini's large context
+        history_context = "Recent Conversation History:\n"
+        for msg in recent_history:
+            role = "User" if msg.get("type") == "user" else "Assistant"
+            content = re.sub('<[^<]+>', '', msg.get("content", ""))
+            history_context += f"{role}: {content}\n"
+        history_context += "\n"
+
+    prompt = f"""
 You are “SECURIT OS AI” — an advanced, privileged, voice-controlled operating system assistant and security layer.
 You are deeply integrated with the host operating system and have controlled administrative-level access to system resources.
 
-Parse the following command: "{text}".
+{history_context}
+Parse the following new command: "{text}".
 Map the command to ONE of the intents: QUERY, ACTION, or SECURITY.
 Determine if action is required, and if confirmation is required.
 Critical actions (like killing a process, blocking an IP, or quarantining/blocking a file) ALWAYS require confirmation (set "confirmation_required" to true).
+If the user's command is a conversational question, follow-up, or clarification (e.g. "what do you mean?", "why?", "tell me more"), set intent to QUERY, action to null, and provide a helpful, natural language conversational response in the "response" field based on the Recent Conversation History.
 
 Return ONLY a raw JSON object matching this structure (no markdown, no backticks, no extra text):
 {{
@@ -429,72 +505,160 @@ Available action names:
 - "get_users" (intent: QUERY): active logged in users
 - "get_env_vars" (intent: QUERY): environment variables
 """
-        payload = {
-            "model": "llama-3.1-8b-instant",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1
-        }
-        res = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers, json=payload, timeout=8
-        )
-        if res.status_code == 200:
-            content = res.json()["choices"][0]["message"]["content"].strip()
-            if content.startswith("```"):
-                content = content.replace("```json", "").replace("```", "").strip()
-            parsed_json = json.loads(content)
-            if "speech_response" not in parsed_json and "response" in parsed_json:
-                parsed_json["speech_response"] = parsed_json["response"]
-            return parsed_json
-    except Exception as e:
-        print(f"[!] Groq parsing failed: {e}. Falling back to rule engine.")
+
+    if GEMINI_API_KEY:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+            payload = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "responseMimeType": "application/json"
+                }
+            }
+            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
+            if res.status_code == 200:
+                content = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                parsed_json = json.loads(content)
+                if "speech_response" not in parsed_json and "response" in parsed_json:
+                    parsed_json["speech_response"] = parsed_json["response"]
+                return parsed_json
+            else:
+                print(f"[!] Gemini parsing failed: {res.text}. Falling back to Groq.")
+        except Exception as e:
+            print(f"[!] Gemini error: {e}. Falling back to Groq.")
+
+    # Fallback to Groq
+    if GROQ_API_KEY:
+        try:
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1
+            }
+            res = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers, json=payload, timeout=8
+            )
+            if res.status_code == 200:
+                content = res.json()["choices"][0]["message"]["content"].strip()
+                if content.startswith("```"):
+                    content = content.replace("```json", "").replace("```", "").strip()
+                parsed_json = json.loads(content)
+                if "speech_response" not in parsed_json and "response" in parsed_json:
+                    parsed_json["speech_response"] = parsed_json["response"]
+                return parsed_json
+        except Exception as e:
+            print(f"[!] Groq parsing failed: {e}. Falling back to rule engine.")
+    
     return None
+
+
+
+def _make_masquerade_threat(name: str, exe: str, pid: int) -> dict:
+    """Build a standardized masquerade-process threat dict."""
+    return {
+        "intent": "SECURITY",
+        "action_required": False,
+        "confirmation_required": False,
+        "target": "process",
+        "user_mode": "advanced",
+        "response": f"CRITICAL: System process '{name}' is running from an unexpected location: {exe} (PID: {pid}).",
+        "speech_response": f"Critical process masquerading threat. System process {name} is running outside its expected system path.",
+        "technical_details": (
+            f"Integrity check failed: '{name}' (PID {pid}) started from non-standard path '{exe}'. "
+            "Expected a protected system directory. Digital signature: unverified."
+        ),
+        "execution_plan": [
+            f"Terminate masquerading process {name} (PID {pid})",
+            f"Quarantine file {exe}",
+        ],
+        "threat_level": "CRITICAL",
+        "source": "process",
+        "event": "Process Integrity Violation / Masquerading",
+        "detected_issue": f"System process '{name}' running outside expected path (Location: {exe}, PID: {pid}).",
+        "recommended_action": [
+            f"Terminate masquerading process {name} (PID {pid})",
+            f"Quarantine file {exe}",
+        ],
+        "auto_action_possible": True,
+        "user_message": (
+            f"CRITICAL: A process named '{name}' was detected running outside its expected system location. "
+            "This is a critical masquerading threat."
+        ),
+    }
 
 
 def audit_process_integrity():
     import psutil
+    import platform as _platform
     threats = []
-    system32_path = "C:\\Windows\\System32"
-    for proc in psutil.process_iter(['pid', 'name', 'exe', 'username']):
-        try:
-            pid = proc.info['pid']
-            name = proc.info['name']
-            exe = proc.info['exe']
-            
-            if not exe:
+    sys_name = _platform.system()
+
+    if sys_name == "Windows":
+        system32 = "C:\\Windows\\System32"
+        watch_names = {"svchost.exe", "lsass.exe", "services.exe",
+                       "wininit.exe", "smss.exe", "csrss.exe"}
+        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+            try:
+                pid, name, exe = proc.info['pid'], proc.info['name'], proc.info['exe']
+                if not exe:
+                    continue
+                if name.lower() in watch_names and not exe.lower().startswith(system32.lower()):
+                    threats.append(_make_masquerade_threat(name, exe, pid))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-                
-            # Masquerading Check (e.g., svchost.exe running outside System32)
-            system_names = ["svchost.exe", "lsass.exe", "services.exe", "wininit.exe", "smss.exe", "csrss.exe"]
-            if name.lower() in system_names:
-                if not exe.lower().startswith(system32_path.lower()):
-                    threats.append({
-                        "intent": "SECURITY",
-                        "action_required": False,
-                        "confirmation_required": False,
-                        "target": "process",
-                        "user_mode": "advanced",
-                        "response": f"CRITICAL: A fake system process '{name}' is running outside System32 (Location: {exe}, PID: {pid}).",
-                        "speech_response": f"Critical process masquerading threat. Fake system process {name} running outside system 32.",
-                        "technical_details": f"Integrity check failed: System binary '{name}' initiated from non-standard path '{exe}'. Signature check: Unsigned.",
-                        "execution_plan": [
-                            f"Terminate masquerading process {name} (PID {pid})",
-                            f"Quarantine file {exe}"
-                        ],
-                        # STRICT EDR JSON Format (Rule 9)
-                        "threat_level": "CRITICAL",
-                        "source": "process",
-                        "event": "Process Integrity Violation / Masquerading",
-                        "detected_issue": f"Fake system process '{name}' running outside System32 (Location: {exe}, PID: {pid}).",
-                        "recommended_action": [
-                            f"Terminate masquerading process {name} (PID {pid})",
-                            f"Quarantine file {exe}"
-                        ],
-                        "auto_action_possible": True,
-                        "user_message": f"CRITICAL: A process named '{name}' was detected running outside System32 folder. This is a critical masquerading threat."
-                    })
-        except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
-            continue
+
+    elif sys_name == "Darwin":
+        # Key macOS daemons have fixed paths under /sbin or /System
+        expected = {
+            "launchd": ("/sbin/launchd",),
+            "configd": ("/usr/libexec/configd",),
+        }
+        protected_prefixes = (
+            "/System/", "/usr/sbin/", "/usr/libexec/",
+            "/usr/bin/", "/sbin/", "/bin/",
+        )
+        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+            try:
+                pid, name, exe = proc.info['pid'], proc.info['name'], proc.info['exe']
+                if not exe or not name:
+                    continue
+                nl = name.lower()
+                if nl in expected:
+                    if not any(exe.startswith(p) for p in expected[nl]):
+                        threats.append(_make_masquerade_threat(name, exe, pid))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+    else:
+        # Linux: watch key system daemons
+        expected = {
+            "systemd": ("/lib/systemd/systemd", "/usr/lib/systemd/systemd", "/usr/sbin/init"),
+            "sshd": ("/usr/sbin/sshd",),
+            "cron": ("/usr/sbin/cron", "/usr/sbin/crond"),
+        }
+        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+            try:
+                pid, name, exe = proc.info['pid'], proc.info['name'], proc.info['exe']
+                if not exe or not name:
+                    continue
+                nl = name.lower()
+                if nl in expected:
+                    if not any(exe.startswith(p) for p in expected[nl]):
+                        threats.append(_make_masquerade_threat(name, exe, pid))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
     return threats
 
 
@@ -548,55 +712,130 @@ def audit_network_traffic():
     return threats
 
 
+def _make_persistence_threat(entry_name: str, target_path: str, location: str, source: str) -> dict:
+    """Build a standardized persistence-mechanism threat dict."""
+    return {
+        "intent": "SECURITY",
+        "action_required": False,
+        "confirmation_required": False,
+        "target": "system",
+        "user_mode": "advanced",
+        "response": f"Detected a suspicious startup registration: '{entry_name}' targeting an unexpected location.",
+        "speech_response": "Persistence mechanism detected in startup configuration.",
+        "technical_details": (
+            f"Startup entry in {location}: '{entry_name}' → '{target_path}'. "
+            "Entry targets a writable or temporary directory."
+        ),
+        "execution_plan": [
+            f"Remove startup entry '{entry_name}'",
+            "Scan associated file signature",
+        ],
+        "threat_level": "SUSPICIOUS",
+        "source": source,
+        "event": "Persistence Mechanism Detected",
+        "detected_issue": f"Suspicious startup registration '{entry_name}' → '{target_path}'",
+        "recommended_action": [
+            f"Remove startup entry '{entry_name}'",
+            "Scan associated file signature",
+        ],
+        "auto_action_possible": True,
+        "user_message": f"Detected a suspicious startup program: '{entry_name}' pointing to an unexpected location.",
+    }
+
+
 def audit_registry_persistence():
-    import os
+    import platform as _platform
     threats = []
-    try:
-        import winreg
-        run_paths = [
-            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
-            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run")
+    sys_name = _platform.system()
+
+    if sys_name == "Windows":
+        try:
+            import winreg
+            run_paths = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+                (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+            ]
+            for hkey, reg_path in run_paths:
+                try:
+                    key = winreg.OpenKey(hkey, reg_path, 0, winreg.KEY_READ)
+                    info = winreg.QueryInfoKey(key)
+                    for i in range(info[1]):
+                        name, val, _ = winreg.EnumValue(key, i)
+                        user_profile = os.environ.get("USERPROFILE", "").lower()
+                        temp_dir = os.environ.get("TEMP", "").lower()
+                        vl = val.lower()
+                        if ((user_profile and user_profile in vl) or
+                                (temp_dir and temp_dir in vl) or
+                                ".vbs" in vl or ".bat" in vl or "powershell" in vl):
+                            threats.append(_make_persistence_threat(
+                                name, val, f"HKLM\\...\\Run", "registry"
+                            ))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    elif sys_name == "Darwin":
+        launch_dirs = [
+            os.path.expanduser("~/Library/LaunchAgents"),
+            "/Library/LaunchAgents",
+            "/Library/LaunchDaemons",
         ]
-        for hkey, path in run_paths:
+        home = os.path.expanduser("~")
+        for launch_dir in launch_dirs:
+            if not os.path.isdir(launch_dir):
+                continue
             try:
-                key = winreg.OpenKey(hkey, path, 0, winreg.KEY_READ)
-                info = winreg.QueryInfoKey(key)
-                for i in range(info[1]):
-                    name, val, _ = winreg.EnumValue(key, i)
-                    # If value points to temp or user directories, flag it
-                    user_profile = os.environ.get("USERPROFILE", "").lower()
-                    temp_dir = os.environ.get("TEMP", "").lower()
-                    val_lower = val.lower()
-                    if (user_profile and user_profile in val_lower) or (temp_dir and temp_dir in val_lower) or ".vbs" in val_lower or ".bat" in val_lower or "powershell" in val_lower:
-                        threats.append({
-                            "intent": "SECURITY",
-                            "action_required": False,
-                            "confirmation_required": False,
-                            "target": "system",
-                            "user_mode": "advanced",
-                            "response": f"Detected a suspicious startup registration: '{name}' pointing to script or user directory.",
-                            "speech_response": "Persistence mechanism detected in registry run key.",
-                            "technical_details": f"Registry key: HKLM\\...\\Run\\{name}. Path: {val}. Executable is unsigned or located in a writable profile directory.",
-                            "execution_plan": [
-                                f"Remove registry entry '{name}'",
-                                "Scan file signature"
-                            ],
-                            # STRICT EDR JSON Format (Rule 9)
-                            "threat_level": "SUSPICIOUS",
-                            "source": "registry",
-                            "event": "Persistence Mechanism Detected",
-                            "detected_issue": f"Suspicious startup registration '{name}' -> '{val}'",
-                            "recommended_action": [
-                                f"Remove registry entry '{name}'",
-                                "Scan file signature"
-                            ],
-                            "auto_action_possible": True,
-                            "user_message": f"Detected a suspicious startup program: '{name}' pointing to script or user directory."
-                        })
+                for fname in os.listdir(launch_dir):
+                    fpath = os.path.join(launch_dir, fname)
+                    if not os.path.isfile(fpath):
+                        continue
+                    try:
+                        with open(fpath, "r", errors="ignore") as f:
+                            content = f.read()
+                        # Flag plists that reference /tmp or user-writable paths outside standard dirs
+                        suspicious = (
+                            "/tmp/" in content or "/var/tmp/" in content or
+                            (home in content and
+                             "/Library/" not in content and
+                             "/Applications/" not in content)
+                        )
+                        if suspicious:
+                            threats.append(_make_persistence_threat(
+                                fname, fpath, launch_dir, "launchd"
+                            ))
+                    except Exception:
+                        pass
             except Exception:
                 continue
-    except Exception:
-        pass
+
+    else:
+        # Linux: check autostart and systemd user units
+        autostart_dirs = [
+            os.path.expanduser("~/.config/autostart"),
+            os.path.expanduser("~/.local/share/systemd/user"),
+        ]
+        home = os.path.expanduser("~")
+        for adir in autostart_dirs:
+            if not os.path.isdir(adir):
+                continue
+            try:
+                for fname in os.listdir(adir):
+                    fpath = os.path.join(adir, fname)
+                    if not os.path.isfile(fpath):
+                        continue
+                    try:
+                        with open(fpath, "r", errors="ignore") as f:
+                            content = f.read()
+                        if "/tmp/" in content or "/var/tmp/" in content:
+                            threats.append(_make_persistence_threat(
+                                fname, fpath, adir, "systemd"
+                            ))
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
     return threats
 
 
@@ -876,8 +1115,13 @@ def parse_command(cmd: CommandInput):
 
     # 2. Local rule engine first for deterministic keywords (fast & reliable)
     text = cmd.text.lower().strip()
-    # Normalize speech wake phrase 'jarvis,' prefix if present
-    clean_text = text.replace("jarvis,", "").replace("jarvis", "").strip()
+    
+    # Input Cleaning: remove 'hey jarvis', 'jarvis', 'assistant' wake words
+    clean_text = text
+    for wake in ["hey jarvis", "hey, jarvis", "jarvis,", "jarvis", "assistant,", "assistant"]:
+        clean_text = clean_text.replace(wake, "")
+    clean_text = clean_text.strip()
+
     result = local_rule_engine(clean_text)
     result["_text"] = cmd.text
     
@@ -895,11 +1139,11 @@ def parse_command(cmd: CommandInput):
             
         return format_securit_response(result)
 
-    # 2. Try Groq LLM for general and complex requests
-    groq_result = parse_with_groq(cmd.text)
-    if groq_result:
-        groq_result["_text"] = cmd.text
-        params = groq_result.get("parameters", {})
+    # 3. Try Gemini/Groq LLM for general and complex requests
+    ai_result = parse_with_ai(clean_text, history=cmd.history)
+    if ai_result:
+        ai_result["_text"] = cmd.text
+        params = ai_result.get("parameters", {})
         if not isinstance(params, dict):
             params = {}
         if "pid" in params and params["pid"]:
@@ -907,24 +1151,111 @@ def parse_command(cmd: CommandInput):
                 params["pid"] = int(params["pid"])
             except ValueError:
                 params["pid"] = None
-        groq_result["parameters"] = params
+        ai_result["parameters"] = params
 
-        action = groq_result.get("action")
+        action = ai_result.get("action")
         is_critical = action in ["kill_pid", "kill_name", "block_address", "quarantine_file"]
         
         if is_critical:
             target_name = params.get("ip") or params.get("filepath") or params.get("name") or params.get("pid") or "this target"
             msg = f"Do you want to permanently block or terminate {target_name}?"
-            groq_result["response"] = msg
-            groq_result["confirmation_required"] = True
-            return format_securit_response(groq_result)
+            ai_result["response"] = msg
+            ai_result["confirmation_required"] = True
+            return format_securit_response(ai_result)
 
-        enriched = enrich_with_live_data(action, params, groq_result.get("speech_response", ""))
-        groq_result.update(enriched)
-        return format_securit_response(groq_result)
+        enriched = enrich_with_live_data(action, params, ai_result.get("speech_response", ""))
+        ai_result.update(enriched)
+        return format_securit_response(ai_result)
 
-    # 3. Fallback result if both Groq and local rules are unknown
-    return format_securit_response(result)
+    # 4. Mandatory Fallback System (very important if Groq fails/is empty and local rule was UNKNOWN)
+    fallback_result = {
+        "intent": "QUERY",
+        "action": None,
+        "parameters": {},
+        "speech_response": "I didn't quite catch that. Could you rephrase your question?",
+        "data": None,
+        "_text": cmd.text
+    }
+    
+    clean_lower = clean_text.lower()
+    
+    if "cpu" in clean_lower or "memory" in clean_lower or "ram" in clean_lower:
+        fallback_result.update({
+            "intent": "GET_CPU_MEM",
+            "action": "get_cpu_mem",
+            "speech_response": "Checking CPU and memory statistics..."
+        })
+    elif "network" in clean_lower or "connection" in clean_lower or "socket" in clean_lower:
+        fallback_result.update({
+            "intent": "GET_CONNECTIONS",
+            "action": "get_network",
+            "speech_response": "Listing active network connections..."
+        })
+    elif "disk" in clean_lower or "storage" in clean_lower or "space" in clean_lower:
+        fallback_result.update({
+            "intent": "GET_DISK",
+            "action": "get_disk",
+            "speech_response": "Retrieving disk partition details..."
+        })
+    elif "process" in clean_lower or "exe" in clean_lower:
+        fallback_result.update({
+            "intent": "GET_PROCESSES",
+            "action": "get_processes",
+            "speech_response": "Listing active processes on the host..."
+        })
+    elif "kill" in clean_lower or "terminate" in clean_lower:
+        pid_match = re.search(r'\b\d+\b', clean_lower)
+        if pid_match:
+            pid = int(pid_match.group(0))
+            fallback_result.update({
+                "intent": "TERMINATE_PROCESS",
+                "action": "kill_pid",
+                "parameters": {"pid": pid},
+                "speech_response": f"Initiating termination for PID {pid}."
+            })
+        else:
+            name_match = re.search(r'(?:kill|terminate|stop)\s+([a-zA-Z0-9_\-\.]+)', clean_lower)
+            if name_match:
+                name = name_match.group(1)
+                fallback_result.update({
+                    "intent": "TERMINATE_PROCESS",
+                    "action": "kill_name",
+                    "parameters": {"name": name},
+                    "speech_response": f"Initiating termination for process {name}."
+                })
+            else:
+                fallback_result.update({
+                    "intent": "TERMINATE_PROCESS",
+                    "speech_response": "Please specify a process PID or name to terminate."
+                })
+    elif "block" in clean_lower or "firewall" in clean_lower:
+        ip_match = re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', clean_lower)
+        if ip_match:
+            ip = ip_match.group(0)
+            fallback_result.update({
+                "intent": "BLOCK_ACTION",
+                "action": "block_address",
+                "parameters": {"ip": ip},
+                "speech_response": f"Blocking IP address {ip}."
+            })
+        else:
+            fallback_result.update({
+                "intent": "BLOCK_ACTION",
+                "speech_response": "Please specify an IP address to block."
+            })
+    elif "boot" in clean_lower or "secure boot" in clean_lower or "tpm" in clean_lower:
+        fallback_result.update({
+            "intent": "CHECK_BOOT",
+            "action": "check_boot_integrity",
+            "speech_response": "Analyzing boot integrity metrics..."
+        })
+
+    if fallback_result["action"]:
+        enriched = enrich_with_live_data(fallback_result["action"], fallback_result.get("parameters", {}), fallback_result["speech_response"])
+        fallback_result.update(enriched)
+        return format_securit_response(fallback_result)
+
+    return format_securit_response(fallback_result)
 
 
 @app.post("/api/ai/confirm_action")
@@ -1097,11 +1428,12 @@ def enrich_with_live_data(action: str, params: dict, default_speech: str) -> dic
     elif action == "get_network":
         data = fetch_core_data("/api/system/connections")
         if data:
-            established = [c for c in data if c.get("status") == "ESTABLISHED"]
+            conns = data.get("connections", [])
+            established = [c for c in conns if c.get("status") == "ESTABLISHED"]
             extra["speech_response"] = (
-                f"There are {len(data)} active connections, {len(established)} in ESTABLISHED state."
+                f"There are {len(conns)} active connections, {len(established)} in ESTABLISHED state."
             )
-            extra["data"] = {"type": "connections", "connections": data[:30]}
+            extra["data"] = {"type": "connections", "connections": conns[:30]}
         else:
             extra["speech_response"] = default_speech
 
@@ -1129,7 +1461,7 @@ def enrich_with_live_data(action: str, params: dict, default_speech: str) -> dic
             
             cached_str = f"Cached memory is at {fmt_bytes(cached_bytes)}. " if cached_bytes else ""
             extra["speech_response"] = (
-                f"Your Windows DNS cache currently holds {dns_count} records. "
+                f"DNS cache currently holds {dns_count} records. "
                 f"{cached_str}Available memory is {avail} GB."
             )
             extra["data"] = {
@@ -1144,7 +1476,7 @@ def enrich_with_live_data(action: str, params: dict, default_speech: str) -> dic
     elif action == "get_os_info":
         data = fetch_core_data("/api/system/os_info")
         if data:
-            sys_name = data.get("system", "Windows")
+            sys_name = data.get("system", "")
             rel = data.get("release", "")
             arch = data.get("machine", "")
             uptime = data.get("uptime", "")
@@ -1161,7 +1493,7 @@ def enrich_with_live_data(action: str, params: dict, default_speech: str) -> dic
         if data:
             running = data.get("total_running", 0)
             extra["speech_response"] = (
-                f"There are currently {running} active running Windows background services."
+                f"There are currently {running} active running background services."
             )
             extra["data"] = {"type": "services_info", **data}
         else:
@@ -1227,6 +1559,32 @@ def enrich_with_live_data(action: str, params: dict, default_speech: str) -> dic
                     extra["speech_response"] = "Core agent returned an error while quarantining the file."
             except Exception as e:
                 extra["speech_response"] = f"Error calling Core quarantine API: {str(e)}"
+
+    elif action == "get_processes":
+        data = fetch_core_data("/api/system/processes")
+        if data:
+            procs = data.get("processes", [])
+            total = len(procs)
+            high_risk = len([p for p in procs if p.get("risk_score", 0) >= 60])
+            extra["speech_response"] = (
+                f"There are currently {total} processes running on the system. "
+                f"Risk assessment shows {high_risk} processes flagged as elevated or high risk."
+            )
+            extra["data"] = {"type": "processes_info", "total": total, "high_risk": high_risk, "processes": procs[:15]}
+        else:
+            extra["speech_response"] = "Could not retrieve process list from Core Agent."
+
+    elif action == "check_boot_integrity":
+        boot_info = check_boot_integrity()
+        sb = boot_info.get("secure_boot", "disabled")
+        tpm = boot_info.get("tpm_status", "unavailable")
+        risk = boot_info.get("risk_level", "CRITICAL")
+        issue = boot_info.get("issue", "")
+        extra["speech_response"] = (
+            f"Boot integrity scan complete. Secure Boot is {sb}, and TPM status is {tpm}. "
+            f"Overall risk assessment: {risk}. {issue}."
+        )
+        extra["data"] = {"type": "boot_integrity", **boot_info}
 
     return extra
 
@@ -1428,7 +1786,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
         files = {
             "file": (filename, content, file.content_type),
-            "model": (None, "distil-whisper-large-v3-en"),
+            "model": (None, "whisper-large-v3-turbo"),
             "language": (None, "en")
         }
         res = requests.post(
@@ -1436,11 +1794,15 @@ async def transcribe_audio(file: UploadFile = File(...)):
             headers=headers, files=files, timeout=15
         )
         if res.status_code == 200:
-            return {"transcript": res.json().get("text", "")}
+            text = res.json().get("text", "")
+            print(f"[+] Transcription successful: {text}")
+            return {"transcript": text}
         else:
+            print(f"[-] Groq Whisper error: {res.text}")
             raise HTTPException(status_code=res.status_code,
                                 detail=f"Groq Whisper error: {res.text}")
     except Exception as e:
+        print(f"[-] Transcription exception: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Transcription error: {str(e)}")
 
 
@@ -1467,4 +1829,4 @@ def speak(payload: SpeakInput):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

@@ -1,0 +1,197 @@
+/* ─── Voice Orb / Visualizer ──────────────────────────────────────────────
+   A reactive glowing sphere. The audio-driven pulse rides on a CSS custom
+   property (--audio-level: 0..1) so JS updates don't re-render React.
+   ──────────────────────────────────────────────────────────────────────── */
+
+.voice-orb {
+  --orb-size: 320px;
+  --audio-level: 0;
+
+  /* Color palette per state — overridden by .voice-orb--<state> */
+  --orb-c1: #60a5fa;          /* highlight */
+  --orb-c2: #2563eb;          /* mid       */
+  --orb-c3: #0b1f4a;          /* deep      */
+  --orb-glow: rgba(96, 165, 250, 0.55);
+  --orb-aura: rgba(59, 130, 246, 0.18);
+  --ring-speed: 8s;
+
+  position: relative;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  outline: none;
+  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 240ms ease;
+  isolation: isolate;
+}
+
+.voice-orb:hover { transform: scale(1.02); }
+.voice-orb:active { transform: scale(0.98); }
+.voice-orb:focus-visible {
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.12), 0 0 0 8px var(--orb-glow);
+}
+
+/* ── Core sphere ─────────────────────────────────────────────────────── */
+.orb-core {
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, var(--orb-c1) 0%, var(--orb-c2) 38%, var(--orb-c3) 82%);
+  box-shadow:
+    inset 0 0 60px rgba(255, 255, 255, 0.18),
+    inset 0 0 120px rgba(0, 0, 0, 0.45),
+    0 0 calc(40px + var(--audio-level) * 80px) var(--orb-glow),
+    0 0 calc(80px + var(--audio-level) * 140px) var(--orb-aura);
+  transform: scale(calc(1 + var(--audio-level) * 0.22));
+  transition: box-shadow 80ms linear, transform 60ms linear;
+  z-index: 3;
+}
+
+.orb-core-highlight {
+  position: absolute;
+  top: 14%;
+  left: 22%;
+  width: 38%;
+  height: 28%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 70%);
+  filter: blur(2px);
+  pointer-events: none;
+}
+
+.orb-core-shadow {
+  position: absolute;
+  bottom: 8%;
+  right: 14%;
+  width: 60%;
+  height: 40%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0) 70%);
+  pointer-events: none;
+}
+
+/* ── Rings ───────────────────────────────────────────────────────────── */
+.orb-ring {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.orb-ring--outer {
+  inset: 0;
+  background:
+    conic-gradient(from 0deg, transparent 0deg, var(--orb-c1) 60deg, transparent 120deg,
+                   transparent 180deg, var(--orb-c2) 240deg, transparent 300deg);
+  filter: blur(6px);
+  opacity: 0.55;
+  animation: orb-spin var(--ring-speed) linear infinite;
+  z-index: 1;
+}
+
+.orb-ring--middle {
+  inset: 6%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 30px rgba(255, 255, 255, 0.04);
+  z-index: 2;
+}
+
+.orb-ring--inner {
+  inset: 12%;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  z-index: 2;
+}
+
+/* ── Aura — outer ripple ─────────────────────────────────────────────── */
+.orb-aura {
+  position: absolute;
+  inset: -20%;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--orb-aura) 0%, transparent 60%);
+  filter: blur(20px);
+  z-index: 0;
+  opacity: calc(0.4 + var(--audio-level) * 0.6);
+  transition: opacity 80ms linear;
+}
+
+/* ── State: idle ─────────────────────────────────────────────────────── */
+.voice-orb--idle {
+  --orb-c1: #93c5fd;
+  --orb-c2: #3b82f6;
+  --orb-c3: #0b1f4a;
+  --orb-glow: rgba(59, 130, 246, 0.35);
+  --orb-aura: rgba(59, 130, 246, 0.12);
+  --ring-speed: 16s;
+  filter: saturate(0.85);
+}
+.voice-orb--idle .orb-core { animation: orb-breath 5.4s ease-in-out infinite; }
+
+/* ── State: listening ────────────────────────────────────────────────── */
+.voice-orb--listening {
+  --orb-c1: #67e8f9;
+  --orb-c2: #06b6d4;
+  --orb-c3: #052e3a;
+  --orb-glow: rgba(34, 211, 238, 0.65);
+  --orb-aura: rgba(34, 211, 238, 0.28);
+  --ring-speed: 5s;
+}
+.voice-orb--listening .orb-ring--outer { opacity: 0.9; }
+.voice-orb--listening .orb-aura { animation: orb-aura-pulse 1.8s ease-in-out infinite; }
+
+/* ── State: speaking ─────────────────────────────────────────────────── */
+.voice-orb--speaking {
+  --orb-c1: #fbcfe8;
+  --orb-c2: #ec4899;
+  --orb-c3: #3a0a25;
+  --orb-glow: rgba(236, 72, 153, 0.6);
+  --orb-aura: rgba(236, 72, 153, 0.25);
+  --ring-speed: 4s;
+}
+.voice-orb--speaking .orb-core { animation: orb-speak 0.9s ease-in-out infinite; }
+.voice-orb--speaking .orb-ring--outer { opacity: 0.95; }
+
+/* ── State: thinking ─────────────────────────────────────────────────── */
+.voice-orb--thinking {
+  --orb-c1: #fde68a;
+  --orb-c2: #f59e0b;
+  --orb-c3: #3a2305;
+  --orb-glow: rgba(245, 158, 11, 0.55);
+  --orb-aura: rgba(245, 158, 11, 0.22);
+  --ring-speed: 1.6s;
+}
+.voice-orb--thinking .orb-ring--outer { opacity: 1; }
+.voice-orb--thinking .orb-core { animation: orb-breath 1.8s ease-in-out infinite; }
+
+/* ── Keyframes ───────────────────────────────────────────────────────── */
+@keyframes orb-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orb-breath {
+  0%, 100% { transform: scale(calc(1 + var(--audio-level) * 0.22)); }
+  50%      { transform: scale(calc(1.04 + var(--audio-level) * 0.22)); }
+}
+
+@keyframes orb-speak {
+  0%, 100% { transform: scale(calc(1 + var(--audio-level) * 0.22)); }
+  20%      { transform: scale(calc(1.07 + var(--audio-level) * 0.22)); }
+  60%      { transform: scale(calc(1.02 + var(--audio-level) * 0.22)); }
+}
+
+@keyframes orb-aura-pulse {
+  0%, 100% { opacity: calc(0.35 + var(--audio-level) * 0.5); }
+  50%      { opacity: calc(0.7  + var(--audio-level) * 0.3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-ring--outer,
+  .voice-orb--idle .orb-core,
+  .voice-orb--speaking .orb-core,
+  .voice-orb--thinking .orb-core,
+  .voice-orb--listening .orb-aura {
+    animation: none !important;
+  }
+}

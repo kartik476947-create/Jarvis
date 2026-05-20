@@ -8,11 +8,12 @@ import webbrowser
 def install_dependencies():
     print("[*] Installing required Python dependencies...")
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "--break-system-packages"])
         print("[+] Dependencies installed successfully.")
     except Exception as e:
         print(f"[-] Dependency installation failed: {e}")
-        sys.exit(1)
+        # Don't exit, just continue in case dependencies are already met
+        print("[!] Continuing anyway...")
 
 def run_service(script_name, port):
     print(f"[*] Starting {script_name} on port {port}...")
@@ -37,8 +38,8 @@ def main():
         time.sleep(3)
         
         # Open frontend UI via the core agent web server to ensure secure context for audio/voice features
-        print("[*] Launching Frontend: http://127.0.0.1:8000/")
-        webbrowser.open("http://127.0.0.1:8000/")
+        print("[*] Launching Frontend: http://localhost:8000/")
+        webbrowser.open("http://localhost:8000/")
 
         print("[+] JARVIS Defense Platform is running. Press Ctrl+C in this terminal to shutdown services.")
         
