@@ -1,0 +1,21 @@
+{
+  "processes": {
+    "svchost.exe": {
+      "avg_cpu_percent": 1.2,
+      "allowed_networks": ["192.168.1.1", "8.8.8.8"],
+      "allowed_parents": ["services.exe"]
+    },
+    "explorer.exe": {
+      "avg_cpu_percent": 2.5,
+      "allowed_networks": [],
+      "allowed_parents": ["userinit.exe"]
+    },
+    "chrome.exe": {
+      "avg_cpu_percent": 5.0,
+      "allowed_networks": ["*"],
+      "allowed_parents": ["explorer.exe"]
+    }
+  },
+  "training_status": "completed",
+  "training_duration_hours": 24
+}

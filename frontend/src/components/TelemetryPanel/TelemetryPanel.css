@@ -1,0 +1,72 @@
+.telemetry-panel {
+  display: flex;
+  flex-direction: column;
+  background: #000000;
+  border: none;
+  border-radius: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
+.telemetry-header {
+  padding: 16px 20px 12px;
+  background: #000000;
+  border-bottom: none;
+}
+
+.telemetry-header h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.telemetry-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: #000000;
+  padding: 0 12px;
+}
+
+.telemetry-tabs .tab {
+  flex: 0 1 auto;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  margin-bottom: -1px;
+}
+
+.telemetry-tabs .tab:last-child {
+  border-right: none;
+}
+
+.telemetry-tabs .tab:hover {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.telemetry-tabs .tab.active {
+  background: transparent;
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
+}
+
+.telemetry-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px 16px;
+}
+
+.telemetry-content table {
+  width: 100%;
+}

@@ -1,0 +1,117 @@
+.process-panel {
+  display: flex;
+  flex-direction: column;
+  background: #000000;
+  border: none;
+  border-radius: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
+.process-panel .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px 12px;
+  background: #000000;
+  border-bottom: none;
+  gap: 12px;
+}
+
+.process-panel h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  flex: 1;
+}
+
+.process-panel .panel-header button {
+  white-space: nowrap;
+  font-size: 10px;
+  padding: 6px 12px;
+}
+
+.process-panel .panel-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 0 4px 16px;
+}
+
+.process-panel table {
+  width: 100%;
+}
+
+.process-panel button.danger {
+  padding: 4px 10px;
+  font-size: 10px;
+}
+
+.process-panel tr.row-high-risk td {
+  background: rgba(248, 113, 113, 0.04);
+}
+
+.risk-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.risk-level-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+}
+
+.actions-cell {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.actions-cell button.action-btn {
+  padding: 4px 6px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.actions-cell button.action-btn.danger {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--danger);
+  background: transparent;
+}
+
+.actions-cell button.action-btn.danger:hover {
+  background: rgba(248, 113, 113, 0.15);
+}
+
+.actions-cell button.action-btn.warning {
+  border-color: rgba(251, 191, 36, 0.4);
+  color: var(--warning);
+  background: transparent;
+}
+
+.actions-cell button.action-btn.warning:hover {
+  background: rgba(251, 191, 36, 0.15);
+}
+
+.actions-cell button.action-btn.info {
+  border-color: var(--border-medium);
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.actions-cell button.action-btn.info:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+

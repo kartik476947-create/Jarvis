@@ -1,0 +1,131 @@
+.ai-copilot {
+  display: flex;
+  flex-direction: column;
+  background: #000000;
+  border: none;
+  border-radius: 0;
+  overflow: hidden;
+  height: 100%;
+}
+
+.copilot-header {
+  padding: 16px 20px 12px;
+  background: #000000;
+  border-bottom: none;
+}
+
+.copilot-header h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chat-feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.confirmation-dialog {
+  padding: 14px 20px;
+  background: rgba(248, 113, 113, 0.06);
+  border-top: 1px solid rgba(248, 113, 113, 0.2);
+  border-bottom: 1px solid rgba(248, 113, 113, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.confirmation-dialog p {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0;
+}
+
+.confirmation-dialog button {
+  flex: 1;
+  padding: 8px;
+}
+
+.copilot-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px 20px;
+  border-top: 1px solid var(--border-subtle);
+  background: #000000;
+}
+
+.voice-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.voice-button {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-color: var(--border-medium);
+}
+
+.voice-button.active {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: var(--danger);
+  box-shadow: none;
+}
+
+.listening-indicator {
+  color: var(--danger);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  animation: pulse 1s infinite;
+}
+
+.transcript {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--bg-surface);
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.input-section {
+  display: flex;
+  gap: 8px;
+}
+
+.input-section input {
+  flex: 1;
+  min-height: 40px;
+  border-radius: 8px;
+}
+
+.send-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  flex-shrink: 0;
+  font-size: 14px;
+  border-radius: 8px;
+}

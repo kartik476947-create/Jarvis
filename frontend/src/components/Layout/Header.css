@@ -1,0 +1,165 @@
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: #000000;
+  border-bottom: 1px solid var(--border-subtle);
+  min-height: 80px;
+  gap: 24px;
+  flex-shrink: 0;
+}
+
+.header-left {
+  flex: 0 0 auto;
+}
+
+.jarvis-logo {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  letter-spacing: 0.12em;
+}
+
+.jarvis-logo .version {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-weight: 500;
+  letter-spacing: 0.15em;
+}
+
+.header-status {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-secondary);
+}
+
+.status-indicator .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+  box-shadow: none;
+}
+
+.header-right {
+  flex: 0 0 auto;
+  width: 260px;
+}
+
+.risk-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.risk-meter-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.risk-meter label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+}
+
+.risk-level-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: 4px;
+}
+
+.risk-score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.risk-value-suffix {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.risk-factors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.risk-factors span {
+  font-size: 9px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-bar {
+  width: 100%;
+  height: 4px;
+  background: var(--bg-surface);
+  border: none;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--success), var(--warning), var(--danger));
+  transition: width 0.3s ease;
+  border-radius: 2px;
+}
+
+.risk-value {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.data-source {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+  display: block;
+}
+
+.status-indicator.off {
+  color: var(--text-muted);
+}
+
+.status-indicator.off .dot {
+  background: var(--warning);
+  box-shadow: none;
+}
