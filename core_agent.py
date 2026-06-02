@@ -1543,21 +1543,9 @@ async def startup_event():
     # Start file watcher in background thread (requires watchdog's own threading structure)
     loop.run_in_executor(None, start_file_watcher, loop)
 
-# Serve the frontend directory (built output)
-frontend_dist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
-frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
-# Prefer dist/ (Vite build output), fall back to frontend/ root
-serve_dir = frontend_dist_dir if os.path.exists(frontend_dist_dir) else frontend_dir
-if os.path.exists(serve_dir):
-    from fastapi.responses import FileResponse
-    @app.get("/")
-    def serve_index():
-        response = FileResponse(os.path.join(serve_dir, "index.html"))
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
-    app.mount("/", StaticFiles(directory=serve_dir), name="frontend")
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "jarvis-core-agent"}
 
 if __name__ == "__main__":
     import uvicorn

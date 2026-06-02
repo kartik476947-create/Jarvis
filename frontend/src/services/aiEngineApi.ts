@@ -1,7 +1,9 @@
 import axios from 'axios';
 import type { AIParsedCommand } from '../types';
 
-const AI_URL = 'http://localhost:8001';
+// In production (Vercel), set VITE_AI_ENGINE_URL to your Render service URL.
+// In local dev, falls back to localhost:8001
+const AI_URL = import.meta.env.VITE_AI_ENGINE_URL || 'http://localhost:8001';
 
 const apiClient = axios.create({
   baseURL: AI_URL,

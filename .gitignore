@@ -23,4 +23,15 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Secrets — never commit real keys
 .env
+frontend/.env.local
+frontend/.env.production.local
+
+# Allow example/template env files
+!.env.example
+!frontend/.env.example
+
+# Quarantine directory created at runtime
+quarantine/

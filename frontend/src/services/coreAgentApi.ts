@@ -9,7 +9,9 @@ import type {
   ExecuteResult,
 } from '../types';
 
-const CORE_URL = 'http://localhost:8000';
+// In production (Vercel), set VITE_CORE_AGENT_URL to your Render service URL.
+// In local dev, falls back to localhost:8000
+const CORE_URL = import.meta.env.VITE_CORE_AGENT_URL || 'http://localhost:8000';
 
 const apiClient = axios.create({
   baseURL: CORE_URL,
@@ -107,4 +109,3 @@ export const coreAgentApi = {
     }
   },
 };
-

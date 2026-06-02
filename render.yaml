@@ -1,0 +1,45 @@
+# render.yaml — JARVIS 2.0 Infrastructure as Code
+# Deploy both FastAPI services to Render with a single file.
+#
+# HOW TO USE:
+#   1. Push this repo to GitHub
+#   2. Go to https://dashboard.render.com → New → Blueprint
+#   3. Connect your repo → Render auto-reads this file
+#   4. Set secret env vars (GEMINI_API_KEY, GROQ_API_KEY) in each service's dashboard
+
+services:
+  # ── AI Engine — LLM, STT, TTS, Threat Analysis ─────────────────────────────
+  - type: web
+    name: jarvis-ai-engine
+    runtime: python
+    region: oregon   # or frankfurt / singapore — pick closest to you
+    plan: free
+    rootDir: .       # repo root is the jarvis/ folder
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn ai_engine:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /docs
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false   # Set manually in Render dashboard (secret)
+      - key: GROQ_API_KEY
+        sync: false   # Set manually in Render dashboard (secret)
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+  # ── Core Agent — System Telemetry, Process Monitor, WebSocket ───────────────
+  - type: web
+    name: jarvis-core-agent
+    runtime: python
+    region: oregon
+    plan: free
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn core_agent:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11"
