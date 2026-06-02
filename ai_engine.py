@@ -2,7 +2,12 @@ import os
 import re
 import json
 import requests
-import pyttsx3
+try:
+    import pyttsx3
+    PYTTSX3_AVAILABLE = True
+except ImportError:
+    pyttsx3 = None
+    PYTTSX3_AVAILABLE = False
 import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,17 +38,21 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 CORE_URL = "http://127.0.0.1:8000"
 
-# TTS Engine
-try:
-    tts_engine = pyttsx3.init()
-    tts_engine.setProperty('rate', 155)
-    tts_engine.setProperty('volume', 0.95)
-    voices = tts_engine.getProperty('voices')
-    if len(voices) > 1:
-        tts_engine.setProperty('voice', voices[1].id)
-except Exception as e:
-    print(f"TTS Initialization Warning: {e}")
-    tts_engine = None
+# TTS Engine (Windows only — skipped on Linux/Render)
+tts_engine = None
+if PYTTSX3_AVAILABLE:
+    try:
+        tts_engine = pyttsx3.init()
+        tts_engine.setProperty('rate', 155)
+        tts_engine.setProperty('volume', 0.95)
+        voices = tts_engine.getProperty('voices')
+        if len(voices) > 1:
+            tts_engine.setProperty('voice', voices[1].id)
+    except Exception as e:
+        print(f"TTS Initialization Warning: {e}")
+        tts_engine = None
+else:
+    print("[INFO] pyttsx3 not available on this platform — browser TTS will be used.")
 
 # Isolation Forest
 X_train = np.array([
